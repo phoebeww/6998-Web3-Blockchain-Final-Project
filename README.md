@@ -24,46 +24,133 @@ The Distributed Voting System aims to provide a secure and verifiable framework 
 ## Project Structure
 
 ```
-mvp_blockchain.py   # Core blockchain and Proof-of-Work implementation
-mvp_voting.py       # Command-line voting interface
-demo.py             # Automated demonstration script
+core/
+    blockchain.py   # Block, Transaction, Blockchain (PoW, validation, persistence)
+    node.py         # Node wrapper (one blockchain + peer list + networking hooks)
+
+api/
+    server.py       # FastAPI HTTP server exposing node API
+
+network/
+    schemas.py      # Shared Pydantic models for nodes & message passing
+    tracker.py      # Tracker service for node registration & peer discovery
+
+data/
+    chain_<node-id>.json  # Auto-generated chain files per node
+
  ```
 
 ## Quick Start
 
-### Run the Automated Demo
+### Activate the virtual environment
 
 ```bash
-python demo.py
+python3 -m venv venv
+source venv/bin/activate        # macOS / Linux
+# venv\Scripts\Activate         # Windows PowerShell
+pip install -r requirements.txt
 ```
 
-#### which includes:
-
-- Creates a blockchain
-- Adds sample votes
-- Prevents duplicate voting
-- Mines two blocks
-- Displays results and verifies integrity
-
-### Run the Interactive version:
+### Run the Tracker
 
 ```bash
-python mvp_voting.py
+uvicorn network.tracker:app --reload --port 9000
 ```
 
-#### which provides a simple system for:
+### Run a Node
 
-- Submit votes
-- Mine pending transactions
-- View the blockchain
-- Display vote results
-- Verify chain validity
+```bash
+uvicorn api.server:app --reload --port 8000
+```
+Note: `api/server.py` line 51, we run a single node in this process *right now*. We will run multiple processes with different node_ids/ports for full implementation.
 
-## Future Goals
-Planned improvements beyond the MVP include:
+#### Node endpoints:
+- `POST /vote`
+- `POST /mine`
+- `GET /results`
+- `GET /chain`
+- `GET /stats`
+- `GET /validate`
+- `POST /message` (for P2P messages — not implemented yet)
 
-- Adding persistent storage so the chain can be saved and reloaded
-- Implementing Proof-of-Stake (PoS) or another consensus method
-- Introducing basic networking to allow multiple nodes
-- Adding digital signatures for voter authentication
-- Building a simple web interface for easier interaction
+## Testing (current version)
+
+After running both tracker and node in different terminal, run the script:
+```bash
+chmod +x test_single_node_with_tracker.sh
+./test_single_node_with_tracker.sh
+```
+**This is only based on SINGLE NODE.**
+
+## TODO List
+
+## Backend Networking
+
+### Node Registration with Tracker
+Files: `api/server.py`, `core/node.py`
+
+- After node startup, call:
+node.register_with_tracker("http://localhost:9000")
+- Store returned peer list in self.peers.
+
+### Implement `/message` endpoint logic
+Files: `core/node.py`, `api/server.py`
+
+Implement:
+- Node.broadcast_block (block)
+- Node.request_chain_from_peer (peer)
+- Node.handle_incoming_message (message)
+
+Message types:
+- "NEW_BLOCK"
+- "REQUEST_CHAIN"
+- "CHAIN_RESPONSE"
+
+### Consensus Rule (Longest Valid Chain Wins)
+File: `core/node.py`
+
+When receiving "CHAIN_RESPONSE":
+1. Rebuild chain from message
+2. Validate it
+3. If longer + valid → replace local chain
+4. Save to `data/chain_<node_id>.json`
+
+### Trigger Broadcasting
+File: `core/node.py`
+
+After mining:
+```
+block = self.mine()
+if block:
+    self.broadcast_block(block)
+```
+
+## Front End UI
+
+### Voting UI
+- Form for voter_id + choice
+- Calls `/vote`
+
+### Results UI
+- Table or bar chart
+- Calls `/results`
+
+### Block Explorer
+- Calls `/chain`
+- Shows blocks + transactions
+
+### Node Status Bar
+- Calls `/stats`
+- Shows chain validity badge
+
+### Multi-Node Demo
+- Run UI twice, pointing to:
+    - Node 1 URL
+    - Node 2 URL
+- Shows how nodes differ → later sync when consensus implemented.
+
+## Optional
+- Multi-node startup script (`scripts/start_network.py`)
+- Improved PoW difficulty controls
+
+**TODO items above are not determined and can be discussed later.**
