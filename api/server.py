@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from network.schemas import Message
 from core.node import Node
+from fastapi.middleware.cors import CORSMiddleware
 
 # Read from environment or arguments to allow running multiple nodes
 NODE_ID = os.getenv("NODE_ID", "node-1")
@@ -51,6 +52,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=f"Voting Node {NODE_ID}", lifespan=lifespan)
 node = Node(node_id=NODE_ID, host=HOST, port=PORT)
 
+# cors
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # models
 
 class VoteRequest(BaseModel):
@@ -84,11 +94,6 @@ class StatsResponse(BaseModel):
     chain_valid: bool
     peers: int
 
-# apps
-app = FastAPI(title=f"Voting Node {NODE_ID}", lifespan=lifespan)
-
-# Initialize Node ONCE using the environment variables
-node = Node(node_id=NODE_ID, host=HOST, port=PORT)
 
 @app.get("/health")
 def health() -> Dict[str, str]:
@@ -138,6 +143,7 @@ def validate_chain() -> Dict[str, Any]:
     """
     valid = node.blockchain.is_chain_valid()
     return {"valid": valid}
+
 
 @app.post("/message")
 def receive_message(msg: Message) -> Dict[str, Any]:
