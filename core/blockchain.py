@@ -119,6 +119,7 @@ class Blockchain:
             index=0,
             transactions=[],
             previous_hash="0",
+            timestamp=0.0 # set to 0.0 for fixed timestamp
         )
         genesis.mine(self.difficulty)
         self.chain.append(genesis)

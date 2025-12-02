@@ -64,6 +64,9 @@ class Node:
         block = self.blockchain.mine_pending_transactions()
         if block is not None:
             self.save_chain()
+            # broadcast the new block to peers!
+            print(f"[{self.node_id}] Block mined. Broadcasting...")
+            self.broadcast_block(block)
         return block
 
     def get_results(self) -> Dict[str, Any]:
@@ -105,79 +108,118 @@ class Node:
             "difficulty": self.blockchain.difficulty,
             "total_votes": total_votes,
             "chain_valid": self.blockchain.is_chain_valid(),
+            "peers": len(self.peers),
         }
 
     # networking hooks
     
     def register_with_tracker(self, tracker_url: str) -> None:
-        """
-        Call this once when the node starts.
-
-        Example:
-            node.register_with_tracker("http://127.0.0.1:9000")
-        """
-        payload = {
-            "node_id": self.node_id,
-            "host": self.host,
-            "port": self.port,
-        }
-
-        resp = requests.post(f"{tracker_url}/register", json=payload, timeout=5)
-        resp.raise_for_status()
-
-        data = resp.json()
-        reg = RegisterResponse(**data)
-
-        # store peers, exclude ourselves (optional)
-        self.peers = [
-            p.dict()
-            for p in reg.peers
-            if p.node_id != self.node_id
-        ]
-
-    def update_peers(self, peers: List[Dict[str, Any]]) -> None:
-        """
-        Replace the current peer list with a new one.
-        """
-        self.peers = peers
+        print(f"[{self.node_id}] Registering with tracker at {tracker_url}...")
+        payload = {"node_id": self.node_id, "host": self.host, "port": self.port}
+        try:
+            resp = requests.post(f"{tracker_url}/register", json=payload, timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            # Store peers, exclude ourselves
+            self.peers = [p for p in data.get("peers", []) if p["node_id"] != self.node_id]
+            print(f"[{self.node_id}] Registered. Known peers: {len(self.peers)}")
+        except Exception as e:
+            print(f"[{self.node_id}] Failed to register with tracker: {e}")
 
     def broadcast_block(self, block: Block) -> None:
-        """
-        TODO:
-        Send the newly mined block to all known peers.
-
-        Suggested approach:
-        - For each peer in self.peers:
-            - POST to f"http://{peer['host']}:{peer['port']}/message"
-            - with a Message(type="NEW_BLOCK", data=block.to_dict(), sender_id=self.node_id)
-        """
-        raise NotImplementedError("broadcast_block is not implemented yet")
+        """Send the newly mined block to all known peers."""
+        msg_payload = {
+            "type": "NEW_BLOCK",
+            "data": block.to_dict(),
+            "sender_id": self.node_id
+        }
+        for peer in self.peers:
+            url = f"http://{peer['host']}:{peer['port']}/message"
+            try:
+                requests.post(url, json=msg_payload, timeout=2)
+            except Exception as e:
+                print(f"[{self.node_id}] Failed to broadcast to {peer['node_id']}: {e}")
 
     def request_chain_from_peer(self, peer: Dict[str, Any]) -> None:
-        """
-        TODO :
-        Ask a specific peer for their full chain.
-
-        Suggested approach:
-        - POST a Message(type="REQUEST_CHAIN", data={}, sender_id=self.node_id)
-          to that peer's /message endpoint.
-        """
-        raise NotImplementedError("request_chain_from_peer is not implemented yet")
+        """Ask a specific peer for their full chain."""
+        url = f"http://{peer['host']}:{peer['port']}/message"
+        msg_payload = {
+            "type": "REQUEST_CHAIN",
+            "data": {},
+            "sender_id": self.node_id
+        }
+        try:
+            requests.post(url, json=msg_payload, timeout=2)
+            print(f"[{self.node_id}] Requested chain from {peer['node_id']}")
+        except Exception as e:
+            print(f"[{self.node_id}] Failed to request chain from {peer['node_id']}: {e}")
 
     def handle_incoming_message(self, message: Dict[str, Any]) -> None:
-        """
-        TODO:
-        Handle messages such as NEW_BLOCK, REQUEST_CHAIN, CHAIN_RESPONSE.
+        msg_type = message.get("type")
+        sender_id = message.get("sender_id")
+        data = message.get("data", {})
 
-        Basic idea:
-        - msg = Message(**message)
-        - if msg.type == "NEW_BLOCK":
-              -> validate block, try to append
-              -> if block doesn't fit, maybe trigger REQUEST_CHAIN
-        - elif msg.type == "REQUEST_CHAIN":
-              -> send CHAIN_RESPONSE back to sender with our full chain
-        - elif msg.type == "CHAIN_RESPONSE":
-              -> rebuild a Blockchain from msg.data["chain"]
-                 and adopt it if it's valid and better (longer).
-        """
-        raise NotImplementedError("handle_incoming_message is not implemented yet")
+        print(f"[{self.node_id}] Received {msg_type} from {sender_id}")
+
+        if msg_type == "NEW_BLOCK":
+            # 1. Parse block
+            incoming_block = Block.from_dict(data)
+            last_block = self.blockchain.last_block
+
+            # 2. Check index
+            if incoming_block.index == last_block.index + 1:
+                # It fits perfectly. Verify hash linkage & validity
+                if incoming_block.previous_hash == last_block.hash:
+                    # Append logic is effectively "mining" but we verify PoW matches
+                    if incoming_block.hash.startswith("0" * self.blockchain.difficulty):
+                        self.blockchain.chain.append(incoming_block)
+                        self.save_chain()
+                        print(f"[{self.node_id}] Added Block #{incoming_block.index} from peer.")
+                        # Remove any pending transactions that are now in this block
+                        # (Simple implementation: just clear pending for now, or filter them)
+                        self.blockchain.pending_transactions = []
+                    else:
+                        print(f"[{self.node_id}] Block rejected: Invalid PoW")
+                else:
+                    print(f"[{self.node_id}] Block rejected: Hash mismatch")
+            elif incoming_block.index > last_block.index + 1:
+                # We are behind. Request full chain.
+                # Find the peer info to reply to
+                peer_info = next((p for p in self.peers if p["node_id"] == sender_id), None)
+                if peer_info:
+                    self.request_chain_from_peer(peer_info)
+
+        elif msg_type == "REQUEST_CHAIN":
+            # Send our chain back to the requester
+            peer_info = next((p for p in self.peers if p["node_id"] == sender_id), None)
+            if peer_info:
+                url = f"http://{peer_info['host']}:{peer_info['port']}/message"
+                resp_payload = {
+                    "type": "CHAIN_RESPONSE",
+                    "data": self.blockchain.to_dict(), # Sends full chain
+                    "sender_id": self.node_id
+                }
+                try:
+                    requests.post(url, json=resp_payload, timeout=5)
+                except Exception:
+                    pass
+
+        elif msg_type == "CHAIN_RESPONSE":
+            # Consensus: Longest Valid Chain Wins
+            try:
+                # Load potential new chain (data is a dict representation of Blockchain)
+                incoming_chain_obj = Blockchain.from_dict(data)
+                
+                # Rule 1: Must be longer
+                if len(incoming_chain_obj.chain) > len(self.blockchain.chain):
+                    # Rule 2: Must be valid
+                    if incoming_chain_obj.is_chain_valid():
+                        print(f"[{self.node_id}] Replacing local chain (len {len(self.blockchain.chain)}) with new chain (len {len(incoming_chain_obj.chain)})")
+                        self.blockchain = incoming_chain_obj
+                        self.save_chain()
+                    else:
+                        print(f"[{self.node_id}] Received longer chain but it was invalid.")
+                else:
+                    print(f"[{self.node_id}] Received chain is not longer. Ignoring.")
+            except Exception as e:
+                print(f"[{self.node_id}] Error processing chain response: {e}")
