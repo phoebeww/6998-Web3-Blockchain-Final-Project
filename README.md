@@ -1,6 +1,6 @@
 # Distributed Voting System
 
-A minimal blockchain-based voting system demonstrating transactions, block mining, and chain validation.
+A minimal blockchain-based voting system demonstrating transactions, block mining, peer-to-peer consensus, and chain validation.
 
 ## Overview
 
@@ -8,37 +8,53 @@ The Distributed Voting System aims to provide a secure and verifiable framework 
 
 ### Key Features
 
-- Immutable vote recording through Proof-of-Work (PoW)
-- Prevention of duplicate voting by voter ID
-- Block and chain validation
-- Text-based results visualization
+- **Decentralized UI:** Each node hosts its own frontend; no central server required.
+- **Immutable vote recording:** Uses Proof-of-Work (PoW) to secure the chain.
+- **Consensus Algorithm:** Nodes automatically sync to the longest valid chain.
+- **Double-vote prevention:** Blocks repeated votes from the same voter ID.
+- **Real-time Peer Discovery:** Nodes register with a tracker to find peers.
 
 ### How it works
 
-- Transaction – represents a single vote (`voter_id`, `choice`, `timestamp`)
-- Block – groups transactions and links to the previous block via hash
-- Proof-of-Work – ensures each new block meets the required hash difficulty
-- Validation – detects tampering and maintains chain integrity
-- Double-vote prevention – blocks repeated votes from the same voter ID
+- **Transaction** – represents a single vote (`voter_id`, `choice`, `timestamp`).
+- **Block** – groups transactions and links to the previous block via hash.
+- **Proof-of-Work** – ensures each new block meets the required hash difficulty.
+- **Validation** – detects tampering and maintains chain integrity.
+- **Broadcasting** – when a node mines a block, it broadcasts it to the network.
 
 ## Project Structure
 
+```text
+/
+├── run_network.py      # Automation script to launch Tracker + 3 Nodes + Browser Tabs
+├── core/
+│   ├── blockchain.py   # Block, Transaction, Blockchain
+│   └── node.py         # Node wrapper 
+├── api/
+│   ├── server.py       # FastAPI HTTP server exposing node API & serving UI
+├── network/
+│   ├── schemas.py      # Shared Pydantic models for nodes & message passing
+│   └── tracker.py      # Tracker service for node registration & peer discovery
+├── static/
+│   └── index.html      # React-based Frontend (served by each node)
+└── data/
+    └── chain_<id>.json # Auto-generated chain files per node
 ```
-core/
-    blockchain.py   # Block, Transaction, Blockchain (PoW, validation, persistence)
-    node.py         # Node wrapper (one blockchain + peer list + networking hooks)
 
-api/
-    server.py       # FastAPI HTTP server exposing node API
+## API Endpoints
+Each node exposes the following API endpoints (accessible via `http://localhost:<port>/docs`):
 
-network/
-    schemas.py      # Shared Pydantic models for nodes & message passing
-    tracker.py      # Tracker service for node registration & peer discovery
+- `POST /vote` - Submit a new vote (transaction).
 
-data/
-    chain_<node-id>.json  # Auto-generated chain files per node
+- `POST /mine` - Trigger Proof-of-Work to seal pending votes.
 
- ```
+- `GET /results` - Calculate current election tally.
+
+- `GET /chain` - View the full blockchain history.
+
+- `GET /stats` - View node connectivity and block count.
+
+- `POST /message` - Internal P2P communication endpoint.
 
 ## Quick Start
 
@@ -51,103 +67,50 @@ source venv/bin/activate        # macOS / Linux
 pip install -r requirements.txt
 ```
 
-### Run the Tracker
+### Run the Full Network (Recommended)
+We have included an automation script that launches the Tracker and 3 Nodes simultaneously, and opens their dashboards in your browser.
 
 ```bash
-uvicorn network.tracker:app --reload --port 9000
+python run_network.py
 ```
 
-### Run a Node
+### Manual Startup (Alternative)
+If you prefer running components manually, open separate terminals:
 
+Terminal 1 (Tracker)
 ```bash
-uvicorn api.server:app --reload --port 8000
+uvicorn network.tracker:app --port 9000
 ```
-Note: `api/server.py` line 51, we run a single node in this process *right now*. We will run multiple processes with different node_ids/ports for full implementation.
 
-#### Node endpoints:
-- `POST /vote`
-- `POST /mine`
-- `GET /results`
-- `GET /chain`
-- `GET /stats`
-- `GET /validate`
-- `POST /message` (for P2P messages — not implemented yet)
-
-## Testing (current version)
-
-After running both tracker and node in different terminal, run the script:
+Terminal 2 (Node 1)
 ```bash
-chmod +x test_single_node_with_tracker.sh
-./test_single_node_with_tracker.sh
+export NODE_ID=node-1
+export NODE_PORT=8000
+uvicorn api.server:app --port 8000
 ```
-**This is only based on SINGLE NODE.**
+Repeat for Node 2 (Port 8002) and Node 3 (Port 8003).
+
+## Testing The Consensus
+
+The system simulates a "Mini Internet" on your localhost. Here is how to test the decentralized logic:
+
+1. Launch the network (python run_network.py).
+
+2. Vote on Node 1:
+    - Go to the browser tab for Node 1 (port 8000).
+    - Vote for "Alice" using ID "Voter1".
+    - Go to the Mine tab and mine the block.
+
+3. Verify Sync on Node 2:
+    - Switch to the browser tab for Node 2 (port 8002).
+    - Wait a few seconds.
+    - You will see the block mined by Node 1 appear on Node 2's chain automatically.
+
+4. Test New Node Sync:
+    - The script launches a third node (Node 3) on port 8003.
+    - Even though Node 3 came online after the others, it will automatically download the longest chain from its peers.
 
 ## TODO List
-
-## Backend Networking
-
-### Node Registration with Tracker
-Files: `api/server.py`, `core/node.py`
-
-- After node startup, call:
-node.register_with_tracker("http://localhost:9000")
-- Store returned peer list in self.peers.
-
-### Implement `/message` endpoint logic
-Files: `core/node.py`, `api/server.py`
-
-Implement:
-- Node.broadcast_block (block)
-- Node.request_chain_from_peer (peer)
-- Node.handle_incoming_message (message)
-
-Message types:
-- "NEW_BLOCK"
-- "REQUEST_CHAIN"
-- "CHAIN_RESPONSE"
-
-### Consensus Rule (Longest Valid Chain Wins)
-File: `core/node.py`
-
-When receiving "CHAIN_RESPONSE":
-1. Rebuild chain from message
-2. Validate it
-3. If longer + valid → replace local chain
-4. Save to `data/chain_<node_id>.json`
-
-### Trigger Broadcasting
-File: `core/node.py`
-
-After mining:
-```
-block = self.mine()
-if block:
-    self.broadcast_block(block)
-```
-
-## Front End UI
-
-### Voting UI
-- Form for voter_id + choice
-- Calls `/vote`
-
-### Results UI
-- Table or bar chart
-- Calls `/results`
-
-### Block Explorer
-- Calls `/chain`
-- Shows blocks + transactions
-
-### Node Status Bar
-- Calls `/stats`
-- Shows chain validity badge
-
-### Multi-Node Demo
-- Run UI twice, pointing to:
-    - Node 1 URL
-    - Node 2 URL
-- Shows how nodes differ → later sync when consensus implemented.
 
 ## Optional
 - Multi-node startup script (`scripts/start_network.py`)
