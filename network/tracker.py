@@ -1,7 +1,7 @@
 # network/tracker.py
 from __future__ import annotations
-
-from typing import List
+import time
+from typing import List, Dict, Any
 
 from fastapi import FastAPI
 from network.schemas import NodeInfo, RegisterRequest, RegisterResponse
@@ -11,14 +11,25 @@ app = FastAPI(title="Tracker Service")
 # In-memory list of registered nodes
 
 nodes: List[NodeInfo] = []
+PEER_TIMEOUT = 20 
 
+registered_nodes: Dict[str, Any] = {}
 
-def _find_node(node_id: str) -> int:
-    for i, n in enumerate(nodes):
-        if n.node_id == node_id:
-            return i
-    return -1
-
+def cleanup_stale_nodes():
+    """
+    Iterate through nodes and remove anyone who hasn't updated recently.
+    """
+    now = time.time()
+    # Find IDs to remove
+    dead_ids = []
+    for node_id, data in registered_nodes.items():
+        if now - data["last_seen"] > PEER_TIMEOUT:
+            dead_ids.append(node_id)
+    
+    # Remove them
+    for dead_id in dead_ids:
+        print(f"[Tracker] Removing stale node: {dead_id}")
+        del registered_nodes[dead_id]
 
 @app.get("/health")
 def health() -> dict:
@@ -37,15 +48,15 @@ def register(req: RegisterRequest) -> RegisterResponse:
     global nodes
 
     node_info = NodeInfo(node_id=req.node_id, host=req.host, port=req.port)
-    idx = _find_node(req.node_id)
+    registered_nodes[req.node_id] = {
+        "info": node_info,
+        "last_seen": time.time()
+    }
 
-    if idx == -1:
-        nodes.append(node_info)
-    else:
-        nodes[idx] = node_info
+    cleanup_stale_nodes()
 
-    # Return all peers (including the caller)
-    return RegisterResponse(peers=nodes)
+    active_peers = [data["info"] for data in registered_nodes.values()]
+    return RegisterResponse(peers=active_peers)
 
 
 @app.get("/peers", response_model=list[NodeInfo])
@@ -53,4 +64,5 @@ def get_peers() -> list[NodeInfo]:
     """
     Optional: useful for debugging or monitoring.
     """
-    return nodes
+    cleanup_stale_nodes()
+    return [data["info"] for data in registered_nodes.values()]

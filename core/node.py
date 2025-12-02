@@ -113,7 +113,7 @@ class Node:
 
     # networking hooks
     
-    def register_with_tracker(self, tracker_url: str) -> None:
+    def register_with_tracker(self, tracker_url: str) -> bool:
         print(f"[{self.node_id}] Registering with tracker at {tracker_url}...")
         payload = {"node_id": self.node_id, "host": self.host, "port": self.port}
         try:
@@ -123,9 +123,52 @@ class Node:
             # Store peers, exclude ourselves
             self.peers = [p for p in data.get("peers", []) if p["node_id"] != self.node_id]
             print(f"[{self.node_id}] Registered. Known peers: {len(self.peers)}")
+            return True
         except Exception as e:
             print(f"[{self.node_id}] Failed to register with tracker: {e}")
+            return False
+            
+    def sync_with_network(self) -> None:
+        """
+        find a peer and download their chain through http.
+        """
+        if not self.peers:
+            return
 
+        # <--- CHANGED: Loop through all peers until one works, instead of just peers[0]
+        for peer in self.peers:
+            target_node_id = peer['node_id']
+            print(f"[{self.node_id}] Attempting sync from {target_node_id}...")
+            
+            try:
+                # Direct Download from the peer's /chain endpoint
+                url = f"http://{peer['host']}:{peer['port']}/chain"
+                resp = requests.get(url, timeout=5)
+                
+                if resp.status_code == 200:
+                    remote_chain_list = resp.json()
+                    
+                    # We need to wrap the list in a dict to match what Blockchain.from_dict expects
+                    data_wrapper = {
+                        "difficulty": self.blockchain.difficulty,
+                        "chain": remote_chain_list,
+                        "pending_transactions": []
+                    }
+                    
+                    new_chain = Blockchain.from_dict(data_wrapper)
+                    
+                    # If valid and longer, replace ours
+                    if new_chain.is_chain_valid() and len(new_chain.chain) > len(self.blockchain.chain):
+                        self.blockchain = new_chain
+                        self.save_chain()
+                        print(f"[{self.node_id}] Sync successful from {target_node_id}. Current height: {len(self.blockchain.chain)}")
+                        break # <--- ADDED: Stop looking if we successfully synced
+                    else:
+                        print(f"[{self.node_id}] Remote chain from {target_node_id} was not better. Sync skipped.")
+            except Exception as e:
+                print(f"[{self.node_id}] Sync failed from {target_node_id}: {e}")
+                # Continue to next peer if this one failed
+            
     def broadcast_block(self, block: Block) -> None:
         """Send the newly mined block to all known peers."""
         msg_payload = {
@@ -139,20 +182,6 @@ class Node:
                 requests.post(url, json=msg_payload, timeout=2)
             except Exception as e:
                 print(f"[{self.node_id}] Failed to broadcast to {peer['node_id']}: {e}")
-
-    def request_chain_from_peer(self, peer: Dict[str, Any]) -> None:
-        """Ask a specific peer for their full chain."""
-        url = f"http://{peer['host']}:{peer['port']}/message"
-        msg_payload = {
-            "type": "REQUEST_CHAIN",
-            "data": {},
-            "sender_id": self.node_id
-        }
-        try:
-            requests.post(url, json=msg_payload, timeout=2)
-            print(f"[{self.node_id}] Requested chain from {peer['node_id']}")
-        except Exception as e:
-            print(f"[{self.node_id}] Failed to request chain from {peer['node_id']}: {e}")
 
     def handle_incoming_message(self, message: Dict[str, Any]) -> None:
         msg_type = message.get("type")
@@ -185,9 +214,8 @@ class Node:
             elif incoming_block.index > last_block.index + 1:
                 # We are behind. Request full chain.
                 # Find the peer info to reply to
-                peer_info = next((p for p in self.peers if p["node_id"] == sender_id), None)
-                if peer_info:
-                    self.request_chain_from_peer(peer_info)
+                print(f"[{self.node_id}] Gap detected. Re-syncing...")
+                self.sync_with_network()
 
         elif msg_type == "REQUEST_CHAIN":
             # Send our chain back to the requester

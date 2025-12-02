@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from network.schemas import Message
 from core.node import Node
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 # Read from environment or arguments to allow running multiple nodes
 NODE_ID = os.getenv("NODE_ID", "node-1")
@@ -17,7 +18,7 @@ HOST = os.getenv("NODE_HOST", "127.0.0.1")
 PORT = int(os.getenv("NODE_PORT", "8000"))
 TRACKER_URL = os.getenv("TRACKER_URL", "http://127.0.0.1:9000")
 
-async def periodic_peer_refresh(interval: int = 30):
+async def periodic_peer_refresh(interval: int = 10):
     """
     Runs in the background. Every 'interval' seconds, it asks the tracker
     for the latest list of peers.
@@ -36,14 +37,21 @@ async def periodic_peer_refresh(interval: int = 30):
 async def lifespan(app: FastAPI):
     # register
     print(f"[{NODE_ID}] Startup: Initial registration...")
-    node.register_with_tracker(TRACKER_URL)
+    success = False
+    try:
+        success = node.register_with_tracker(TRACKER_URL)
+    except Exception as e:
+        print(f"[{NODE_ID}] Startup warning: Tracker might be down ({e})")
     
-    # start the loop
-    refresh_task = asyncio.create_task(periodic_peer_refresh(30))
+    # sync
+    if success and node.peers:
+        node.sync_with_network()
+
+    # background loop
+    refresh_task = asyncio.create_task(periodic_peer_refresh(10))
     
     yield
     
-    # cancel loop
     refresh_task.cancel()
     print(f"[{NODE_ID}] Shutting down.")
 
@@ -154,3 +162,4 @@ def receive_message(msg: Message) -> Dict[str, Any]:
     node.handle_incoming_message(msg.model_dump())
     return {"ok": True}
 
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
