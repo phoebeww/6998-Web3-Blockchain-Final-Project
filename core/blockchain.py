@@ -93,6 +93,7 @@ class Block:
     """
     Proof-of-work block with stake-based difficulty adjustment.
     Combines PoW security with PoS-like incentives through reputation staking.
+    Uses Merkle tree for efficient transaction integrity verification.
     """
     index: int
     transactions: List[Transaction]
@@ -104,6 +105,48 @@ class Block:
     stake: int = 0  # Miner's stake value at time of mining
     difficulty: int = 0  # Actual difficulty used to mine this block
     base_difficulty: int = 0  # Network base difficulty at time of mining
+    merkle_root: str = ""  # Merkle root of all transactions in this block
+    
+    def __post_init__(self):
+        """Calculate merkle root after initialization if not already set."""
+        if not self.merkle_root:
+            self.merkle_root = self._calculate_merkle_root()
+    
+    def _calculate_merkle_root(self) -> str:
+        """
+        Calculate the Merkle root of all transactions in this block.
+        
+        A Merkle tree is a binary tree where:
+        - Leaves are hashes of individual transactions
+        - Each parent node is the hash of its two children
+        - The root represents a cryptographic commitment to all transactions
+        
+        Returns:
+            str: Hex string of the Merkle root hash
+        """
+        if not self.transactions:
+            # Empty block: return hash of empty string
+            return hashlib.sha256(b"").hexdigest()
+        
+        # Get hash of each transaction
+        hashes = [tx.compute_hash() for tx in self.transactions]
+        
+        # Build tree bottom-up until we have a single root
+        while len(hashes) > 1:
+            # If odd number of hashes, duplicate the last one
+            if len(hashes) % 2 != 0:
+                hashes.append(hashes[-1])
+            
+            # Combine pairs of hashes
+            new_level = []
+            for i in range(0, len(hashes), 2):
+                combined = f"{hashes[i]}{hashes[i+1]}"
+                parent_hash = hashlib.sha256(combined.encode()).hexdigest()
+                new_level.append(parent_hash)
+            
+            hashes = new_level
+        
+        return hashes[0]
 
     def compute_hash(self) -> str:
         # note: we don't include self.hash in the data used to compute the hash
@@ -117,16 +160,33 @@ class Block:
             "stake": self.stake,
             "difficulty": self.difficulty,
             "base_difficulty": self.base_difficulty,
+            "merkle_root": self.merkle_root,
         }
         block_string = json.dumps(block_data, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
+    def verify_merkle_root(self) -> bool:
+        """
+        Verify that the merkle_root matches the transactions in this block.
+        
+        Returns:
+            bool: True if merkle root is valid
+        """
+        expected_merkle = self._calculate_merkle_root()
+        return self.merkle_root == expected_merkle
+    
     def mine(self, difficulty: int = 2) -> None:
         """
         Simple proof-of-work: find a hash with `difficulty` leading zeros.
         Records the actual difficulty used for this block.
+        Merkle root is calculated before mining and included in the block hash.
         """
         self.difficulty = difficulty  # Store the difficulty used
+        
+        # Ensure merkle root is calculated before mining
+        if not self.merkle_root:
+            self.merkle_root = self._calculate_merkle_root()
+        
         target_prefix = "0" * difficulty
         # recompute hash each time nonce is updated
         self.hash = self.compute_hash()
@@ -146,11 +206,16 @@ class Block:
             "stake": self.stake,
             "difficulty": self.difficulty,
             "base_difficulty": self.base_difficulty,
+            "merkle_root": self.merkle_root,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Block":
         txs = [Transaction.from_dict(tx) for tx in data.get("transactions", [])]
+        
+        # Get stored merkle_root if available, otherwise will be calculated in __post_init__
+        stored_merkle = data.get("merkle_root", "")
+        
         block = cls(
             index=data["index"],
             transactions=txs,
@@ -161,7 +226,10 @@ class Block:
             stake=data.get("stake", 0),
             difficulty=data.get("difficulty", 0),
             base_difficulty=data.get("base_difficulty", 0),
+            merkle_root=stored_merkle,
         )
+        
+        # If merkle_root was not stored, __post_init__ will calculate it
         # If a stored hash exists, keep it; otherwise compute one.
         stored_hash = data.get("hash")
         block.hash = stored_hash or block.compute_hash()
@@ -424,6 +492,7 @@ class Blockchain:
         - the hash of each block is correct
         - the previous_hash links are consistent
         - each block satisfies minimum difficulty requirement
+        - merkle root matches the transactions (if present)
         """
         if not self.chain:
             return True
@@ -442,6 +511,10 @@ class Blockchain:
 
             # Check proof-of-work with minimum difficulty requirement
             if not current.hash.startswith("0" * MIN_DIFFICULTY):
+                return False
+            
+            # Verify merkle root if present
+            if current.merkle_root and not current.verify_merkle_root():
                 return False
 
         return True

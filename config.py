@@ -15,7 +15,7 @@ MIN_DIFFICULTY = 1
 MAX_DIFFICULTY = 5
 
 # Target time between blocks in seconds
-TARGET_BLOCK_TIME = 25
+TARGET_BLOCK_TIME = 17.5
 
 # Number of blocks to analyze when adjusting difficulty
 # Difficulty will only adjust after this many blocks have been mined
@@ -23,10 +23,10 @@ DIFFICULTY_ADJUSTMENT_INTERVAL = 3
 
 # Difficulty adjustment thresholds
 # If average block time is below this, increase difficulty
-DIFFICULTY_INCREASE_THRESHOLD = 20  # seconds
+DIFFICULTY_INCREASE_THRESHOLD = 15  # seconds
 
 # If average block time is above this, decrease difficulty
-DIFFICULTY_DECREASE_THRESHOLD = 30  # seconds
+DIFFICULTY_DECREASE_THRESHOLD = 20  # seconds
 
 # Stake Configuration
 # Initial stake value for new nodes

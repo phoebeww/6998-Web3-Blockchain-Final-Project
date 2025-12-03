@@ -112,6 +112,15 @@
                         </p>
                     </div>
                     
+                    {block.merkle_root && (
+                        <div className="mb-3">
+                            <p className="text-xs text-slate-500 uppercase">Merkle Root</p>
+                            <p className="text-xs font-mono truncate text-purple-400" title={block.merkle_root}>
+                                {block.merkle_root.substring(0, 16)}...
+                            </p>
+                        </div>
+                    )}
+                    
                     {block.miner_id && (
                         <div className="mb-3">
                             <p className="text-xs text-slate-500 uppercase">Miner Info</p>
