@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 import requests
 
 from .blockchain import Blockchain, Block
+from config import MIN_DIFFICULTY, BASE_DIFFICULTY
 
 
 class Node:
@@ -20,7 +21,7 @@ class Node:
         host: str = "127.0.0.1",
         port: int = 8000,
         data_dir: str = "data",
-        difficulty: int = 2,
+        difficulty: int = BASE_DIFFICULTY,
     ) -> None:
         self.node_id = node_id
         self.host = host
@@ -31,7 +32,7 @@ class Node:
         self.chain_path = os.path.join(self.data_dir, f"chain_{self.node_id}.json")
 
         self.blockchain: Blockchain = Blockchain.load_from_file(self.chain_path)
-        self.blockchain.difficulty = difficulty
+        self.blockchain.base_difficulty = difficulty
 
         # simple list of peers
         # e.g. [{"node_id": "node-2", "host": "127.0.0.1", "port": 8001}, ...]
@@ -96,6 +97,7 @@ class Node:
     def get_stats(self) -> Dict[str, Any]:
         """
         Basic stats useful for UI/status displays.
+        Includes dynamic difficulty information.
         """
         results = self.blockchain.get_vote_results()
         total_votes = sum(results.values())
@@ -105,7 +107,8 @@ class Node:
             "host": self.host,
             "port": self.port,
             "blocks": len(self.blockchain.chain),
-            "difficulty": self.blockchain.difficulty,
+            "base_difficulty": self.blockchain.base_difficulty,
+            "avg_block_time": self.blockchain.calculate_average_block_time(),
             "total_votes": total_votes,
             "chain_valid": self.blockchain.is_chain_valid(),
             "peers": len(self.peers),
@@ -150,7 +153,7 @@ class Node:
                     
                     # We need to wrap the list in a dict to match what Blockchain.from_dict expects
                     data_wrapper = {
-                        "difficulty": self.blockchain.difficulty,
+                        "base_difficulty": self.blockchain.base_difficulty,
                         "chain": remote_chain_list,
                         "pending_transactions": []
                     }
@@ -199,8 +202,8 @@ class Node:
             if incoming_block.index == last_block.index + 1:
                 # It fits perfectly. Verify hash linkage & validity
                 if incoming_block.previous_hash == last_block.hash:
-                    # Append logic is effectively "mining" but we verify PoW matches
-                    if incoming_block.hash.startswith("0" * self.blockchain.difficulty):
+                    # Append logic is effectively "mining" but we verify PoW matches minimum difficulty
+                    if incoming_block.hash.startswith("0" * MIN_DIFFICULTY):
                         self.blockchain.chain.append(incoming_block)
                         self.save_chain()
                         print(f"[{self.node_id}] Added Block #{incoming_block.index} from peer.")

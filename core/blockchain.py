@@ -7,6 +7,16 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 
+from config import (
+    BASE_DIFFICULTY,
+    MIN_DIFFICULTY,
+    MAX_DIFFICULTY,
+    TARGET_BLOCK_TIME,
+    DIFFICULTY_ADJUSTMENT_INTERVAL,
+    DIFFICULTY_INCREASE_THRESHOLD,
+    DIFFICULTY_DECREASE_THRESHOLD
+)
+
 @dataclass
 class Transaction:
     """
@@ -102,12 +112,12 @@ class Blockchain:
     Minimal blockchain for a decentralized voting system.
 
     - Stores votes as transactions in blocks.
-    - Uses proof-of-work mining with configurable difficulty.
+    - Uses proof-of-work mining with dynamic difficulty adjustment.
     - Enforces at-most-once voting by voter_id.
     """
 
-    def __init__(self, difficulty: int = 2) -> None:
-        self.difficulty = difficulty
+    def __init__(self, base_difficulty: int = BASE_DIFFICULTY) -> None:
+        self.base_difficulty = base_difficulty
         self.chain: List[Block] = []
         self.pending_transactions: List[Transaction] = []
         self._create_genesis_block()
@@ -121,7 +131,7 @@ class Blockchain:
             previous_hash="0",
             timestamp=0.0 # set to 0.0 for fixed timestamp
         )
-        genesis.mine(self.difficulty)
+        genesis.mine(self.base_difficulty)
         self.chain.append(genesis)
 
     @property
@@ -165,20 +175,85 @@ class Blockchain:
     def add_transaction(self, voter_id: str, choice: str) -> bool:
         return self.cast_vote(voter_id, choice)
 
+    def calculate_average_block_time(self) -> float:
+        """
+        Calculate the average time between blocks in recent history.
+        
+        Caps individual block times at 5x the target to avoid long pauses
+        skewing the average too much.
+        
+        Returns:
+            float: Average block time in seconds, or TARGET_BLOCK_TIME if insufficient data
+        """
+        if len(self.chain) < 2:
+            return TARGET_BLOCK_TIME
+        
+        # Get the most recent blocks for analysis
+        num_blocks = min(DIFFICULTY_ADJUSTMENT_INTERVAL, len(self.chain))
+        recent_blocks = self.chain[-num_blocks:]
+        
+        # Cap for individual block times to avoid extreme outliers
+        MAX_BLOCK_TIME_CAP = TARGET_BLOCK_TIME * 5  # 50 seconds
+        
+        # Calculate time differences between consecutive blocks
+        time_diffs = []
+        for i in range(1, len(recent_blocks)):
+            time_diff = recent_blocks[i].timestamp - recent_blocks[i-1].timestamp
+            # Ignore genesis block with timestamp 0
+            if recent_blocks[i-1].timestamp > 0 and time_diff > 0:
+                # Cap extreme values to avoid long pauses affecting difficulty too much
+                capped_diff = min(time_diff, MAX_BLOCK_TIME_CAP)
+                time_diffs.append(capped_diff)
+        
+        if not time_diffs:
+            return TARGET_BLOCK_TIME
+        
+        return sum(time_diffs) / len(time_diffs)
+    
+    def adjust_difficulty(self) -> int:
+        """
+        Dynamically adjust mining difficulty based on recent block times.
+        
+        If blocks are mined too quickly, increase difficulty.
+        If blocks are mined too slowly, decrease difficulty.
+        
+        Returns:
+            int: The adjusted difficulty value
+        """
+        # Only adjust after sufficient blocks have been mined
+        if len(self.chain) < DIFFICULTY_ADJUSTMENT_INTERVAL:
+            return self.base_difficulty
+        
+        avg_time = self.calculate_average_block_time()
+        
+        # If average block time is too fast, increase difficulty
+        if avg_time < DIFFICULTY_INCREASE_THRESHOLD:
+            self.base_difficulty = min(MAX_DIFFICULTY, self.base_difficulty + 1)
+        
+        # If average block time is too slow, decrease difficulty
+        elif avg_time > DIFFICULTY_DECREASE_THRESHOLD:
+            self.base_difficulty = max(MIN_DIFFICULTY, self.base_difficulty - 1)
+        
+        return self.base_difficulty
+
     def mine_pending_transactions(self) -> Optional[Block]:
         """
         Package all pending transactions into a new block and mine it.
+        Automatically adjusts difficulty based on recent block times.
         Returns the mined block, or None if there were no transactions.
         """
         if not self.pending_transactions:
             return None
+
+        # Adjust difficulty before mining
+        current_difficulty = self.adjust_difficulty()
 
         new_block = Block(
             index=len(self.chain),
             transactions=self.pending_transactions.copy(),
             previous_hash=self.last_block.hash,
         )
-        new_block.mine(self.difficulty)
+        new_block.mine(current_difficulty)
         self.chain.append(new_block)
 
         # Clear pending pool
@@ -190,7 +265,7 @@ class Blockchain:
         Verify that:
         - the hash of each block is correct
         - the previous_hash links are consistent
-        - each block satisfies the current difficulty rule
+        - each block satisfies minimum difficulty requirement
         """
         if not self.chain:
             return True
@@ -207,8 +282,8 @@ class Blockchain:
             if current.previous_hash != previous.hash:
                 return False
 
-            # Check proof-of-work
-            if not current.hash.startswith("0" * self.difficulty):
+            # Check proof-of-work with minimum difficulty requirement
+            if not current.hash.startswith("0" * MIN_DIFFICULTY):
                 return False
 
         return True
@@ -267,14 +342,16 @@ class Blockchain:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "difficulty": self.difficulty,
+            "base_difficulty": self.base_difficulty,
             "chain": [block.to_dict() for block in self.chain],
             "pending_transactions": [tx.to_dict() for tx in self.pending_transactions],
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Blockchain":
-        bc = cls(difficulty=data.get("difficulty", 2))
+        # Support both old 'difficulty' and new 'base_difficulty' keys for backward compatibility
+        difficulty = data.get("base_difficulty", data.get("difficulty", BASE_DIFFICULTY))
+        bc = cls(base_difficulty=difficulty)
         bc.chain = [Block.from_dict(b) for b in data.get("chain", [])]
         
         # if chain list was empty, ensure we have at least a genesis block

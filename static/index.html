@@ -284,7 +284,7 @@
                                     <StatCard 
                                         label="Blocks" 
                                         value={stats.blocks} 
-                                        subtext={`Difficulty: ${stats.difficulty}`}
+                                        subtext={`Difficulty: ${stats.base_difficulty}`}
                                         icon={<IconBox className="text-purple-400"/>} 
                                     />
                                     <StatCard 
@@ -298,6 +298,62 @@
                                         subtext="Active Connections"
                                         icon={<IconRefresh className="text-orange-400"/>} 
                                     />
+                                </div>
+
+                                {/* Difficulty Monitoring Panel */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                                    <h2 className="text-lg font-bold text-white mb-4 flex items-center">
+                                        <IconPickaxe className="mr-2"/> Dynamic Difficulty Monitor
+                                    </h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Current Difficulty</p>
+                                            <p className="text-3xl font-bold text-brand-500">{stats.base_difficulty}</p>
+                                        </div>
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Avg Block Time</p>
+                                            <p className="text-3xl font-bold text-green-400">{stats.avg_block_time?.toFixed(2) || '0.00'}s</p>
+                                        </div>
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Target Time</p>
+                                            <p className="text-3xl font-bold text-slate-400">15.00s</p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                        <p className="text-slate-300 text-sm mb-2">Mining Status</p>
+                                        {stats.avg_block_time < 15 ? (
+                                            <div>
+                                                <p className="text-yellow-400 text-sm mb-1">
+                                                    ⚡ Blocks mining too fast! Difficulty will increase.
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    System will raise difficulty to slow down block production.
+                                                </p>
+                                            </div>
+                                        ) : stats.avg_block_time > 25 ? (
+                                            <div>
+                                                <p className="text-blue-400 text-sm mb-1">
+                                                    🐢 Blocks mining too slow. Difficulty has decreased.
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    {stats.base_difficulty === 1 ? (
+                                                        'Difficulty at minimum (1). Next block will mine very quickly.'
+                                                    ) : (
+                                                        'System is lowering difficulty to maintain steady block production.'
+                                                    )}
+                                                </p>
+                                            </div>
+                                        ) : (
+                                            <div>
+                                                <p className="text-green-400 text-sm mb-1">
+                                                    ✅ Mining speed is optimal. Difficulty stable.
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    Current difficulty: {stats.base_difficulty} | Target: 15-25s per block
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">

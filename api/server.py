@@ -97,7 +97,8 @@ class StatsResponse(BaseModel):
     host: str
     port: int
     blocks: int
-    difficulty: int
+    base_difficulty: int
+    avg_block_time: float
     total_votes: int
     chain_valid: bool
     peers: int
