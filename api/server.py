@@ -76,9 +76,17 @@ class VoteRequest(BaseModel):
     choice: str
 
 
+class SignedVoteRequest(BaseModel):
+    choice: str
+    private_key: str
+    public_key: str
+    username: Optional[str] = ""
+
+
 class VoteResponse(BaseModel):
     ok: bool
     error: Optional[str] = None
+    voter_id: Optional[str] = None
 
 
 class MineResponse(BaseModel):
@@ -109,12 +117,49 @@ def health() -> Dict[str, str]:
     return {"status": "ok", "node_id": node.node_id}
 
 
+@app.get("/generate_keys")
+def generate_keys() -> Dict[str, str]:
+    """
+    Generate a new RSA keypair for voting.
+    """
+    from core.crypto import generate_keypair, hash_public_key
+    private_key, public_key = generate_keypair()
+    voter_id = hash_public_key(public_key)
+    
+    return {
+        "private_key": private_key,
+        "public_key": public_key,
+        "voter_id": voter_id
+    }
+
+
 @app.post("/vote", response_model=VoteResponse)
 def cast_vote(req: VoteRequest) -> VoteResponse:
     accepted = node.cast_vote(req.voter_id, req.choice)
     if not accepted:
         return VoteResponse(ok=False, error="duplicate_voter")
     return VoteResponse(ok=True)
+
+
+@app.post("/vote_signed", response_model=VoteResponse)
+def cast_signed_vote(req: SignedVoteRequest) -> VoteResponse:
+    """
+    Cast a vote with digital signature authentication.
+    """
+    success, error = node.blockchain.cast_signed_vote(
+        choice=req.choice,
+        private_key=req.private_key,
+        public_key=req.public_key,
+        username=req.username or ""
+    )
+    
+    if not success:
+        return VoteResponse(ok=False, error=error)
+    
+    # Return voter ID for display
+    from core.crypto import hash_public_key
+    voter_id = hash_public_key(req.public_key)
+    return VoteResponse(ok=True, voter_id=voter_id)
 
 
 @app.post("/mine", response_model=MineResponse)

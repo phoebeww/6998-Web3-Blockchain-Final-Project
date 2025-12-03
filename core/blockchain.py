@@ -20,17 +20,23 @@ from config import (
 @dataclass
 class Transaction:
     """
-    Represents a single vote in the system.
+    Represents a single vote in the system with digital signature support.
     """
     voter_id: str
     choice: str
     timestamp: float = field(default_factory=time.time)
+    signature: str = ""
+    public_key: str = ""
+    username: str = ""  # Optional display name
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "voter_id": self.voter_id,
             "choice": self.choice,
             "timestamp": self.timestamp,
+            "signature": self.signature,
+            "public_key": self.public_key,
+            "username": self.username,
         }
 
     @classmethod
@@ -39,11 +45,47 @@ class Transaction:
             voter_id=data["voter_id"],
             choice=data["choice"],
             timestamp=data.get("timestamp", time.time()),
+            signature=data.get("signature", ""),
+            public_key=data.get("public_key", ""),
+            username=data.get("username", ""),
         )
 
     def compute_hash(self) -> str:
         tx_string = json.dumps(self.to_dict(), sort_keys=True).encode()
         return hashlib.sha256(tx_string).hexdigest()
+    
+    def get_message_for_signing(self) -> str:
+        """
+        Get the canonical message string that should be signed.
+        Excludes signature field to avoid circular dependency.
+        """
+        return f"{self.voter_id}:{self.choice}:{self.timestamp}"
+    
+    def sign(self, private_key: str) -> None:
+        """
+        Sign this transaction with the given private key.
+        
+        Args:
+            private_key: PEM-encoded RSA private key
+        """
+        from .crypto import sign_message
+        message = self.get_message_for_signing()
+        self.signature = sign_message(message, private_key)
+    
+    def verify(self) -> bool:
+        """
+        Verify that the signature is valid for this transaction.
+        
+        Returns:
+            bool: True if signature is valid, False otherwise
+        """
+        if not self.signature or not self.public_key:
+            # No signature to verify (legacy transaction or invalid)
+            return False
+        
+        from .crypto import verify_signature
+        message = self.get_message_for_signing()
+        return verify_signature(message, self.signature, self.public_key)
 
 
 @dataclass
@@ -159,7 +201,7 @@ class Blockchain:
 
     def cast_vote(self, voter_id: str, choice: str) -> bool:
         """
-        Public API for casting a vote.
+        Public API for casting a vote (legacy, no signature).
 
         Returns True if the vote was accepted,
         False if this voter has already voted.
@@ -171,6 +213,45 @@ class Blockchain:
         tx = Transaction(voter_id=voter_id, choice=choice)
         self.pending_transactions.append(tx)
         return True
+    
+    def cast_signed_vote(self, choice: str, private_key: str, public_key: str, username: str = "") -> tuple[bool, str]:
+        """
+        Cast a vote with digital signature authentication.
+        
+        Args:
+            choice: The candidate to vote for
+            private_key: PEM-encoded private key for signing
+            public_key: PEM-encoded public key
+            username: Optional display name for the voter
+            
+        Returns:
+            tuple: (success: bool, error_message: str)
+        """
+        from .crypto import hash_public_key
+        
+        # Generate voter ID from public key
+        voter_id = hash_public_key(public_key)
+        
+        # Check if already voted
+        if self.has_voted(voter_id):
+            return False, "duplicate_voter"
+        
+        # Create and sign transaction
+        tx = Transaction(
+            voter_id=voter_id,
+            choice=choice,
+            public_key=public_key,
+            username=username
+        )
+        tx.sign(private_key)
+        
+        # Verify signature immediately
+        if not tx.verify():
+            return False, "invalid_signature"
+        
+        # Add to pending pool
+        self.pending_transactions.append(tx)
+        return True, ""
 
     def add_transaction(self, voter_id: str, choice: str) -> bool:
         return self.cast_vote(voter_id, choice)

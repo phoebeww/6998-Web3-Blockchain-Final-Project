@@ -119,12 +119,21 @@
                         </p>
                         <div className="space-y-1 h-16 overflow-y-auto pr-2">
                             {block.transactions.length === 0 ? (
-                                <p className="text-xs text-slate-600 italic">No transactions (Mining Reward)</p>
+                                <p className="text-xs text-slate-600 italic">No transactions</p>
                             ) : (
                                 block.transactions.map((tx, i) => (
-                                    <div key={i} className="text-xs bg-slate-900 p-1 rounded flex justify-between mb-1">
-                                        <span className="font-mono text-brand-200">{tx.voter_id}</span>
-                                        <span className="text-brand-500 font-bold">{tx.choice}</span>
+                                    <div key={i} className="text-xs bg-slate-900 p-1 rounded mb-1">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-brand-200 truncate flex-1" title={tx.voter_id}>
+                                                {tx.username || tx.voter_id.substring(0,8) + '...'}
+                                            </span>
+                                            <span className="text-brand-500 font-bold ml-2">{tx.choice}</span>
+                                        </div>
+                                        {tx.signature && (
+                                            <div className="flex items-center mt-0.5">
+                                                <span className="text-green-400 text-[10px]">✓ Signed</span>
+                                            </div>
+                                        )}
                                     </div>
                                 ))
                             )}
@@ -148,8 +157,20 @@
             const [loading, setLoading] = useState(false);
             
             // Forms
-            const [voteForm, setVoteForm] = useState({ voter_id: "", choice: "" });
+            const [voteForm, setVoteForm] = useState({ voter_id: "", choice: "", username: "" });
             const [mineStatus, setMineStatus] = useState(null);
+            
+            // Crypto keys state
+            const [keys, setKeys] = useState(null);
+            const [showPrivateKey, setShowPrivateKey] = useState(false);
+            
+            // Load keys from localStorage on mount
+            useEffect(() => {
+                const savedKeys = localStorage.getItem('votingKeys');
+                if (savedKeys) {
+                    setKeys(JSON.parse(savedKeys));
+                }
+            }, []);
 
             // Fetch Data using RELATIVE paths (it talks to the server serving this file)
             const fetchData = useCallback(async () => {
@@ -179,19 +200,55 @@
                 return () => clearInterval(interval);
             }, [fetchData]);
 
+            const generateKeys = async () => {
+                try {
+                    const res = await fetch('/generate_keys');
+                    const data = await res.json();
+                    
+                    const newKeys = {
+                        private_key: data.private_key,
+                        public_key: data.public_key,
+                        voter_id: data.voter_id
+                    };
+                    
+                    setKeys(newKeys);
+                    localStorage.setItem('votingKeys', JSON.stringify(newKeys));
+                    alert(`Keys generated! Your Voter ID: ${data.voter_id}`);
+                } catch (err) {
+                    alert("Failed to generate keys.");
+                }
+            };
+            
             const handleVote = async (e) => {
                 e.preventDefault();
+                
+                // Check if user has keys for signed voting
+                if (!keys) {
+                    alert("Please generate your voting keys first!");
+                    return;
+                }
+                
+                if (!voteForm.choice) {
+                    alert("Please select a candidate!");
+                    return;
+                }
+                
                 try {
-                    // Use relative path
-                    const res = await fetch('/vote', {
+                    // Use signed voting endpoint
+                    const res = await fetch('/vote_signed', {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(voteForm)
+                        body: JSON.stringify({
+                            choice: voteForm.choice,
+                            private_key: keys.private_key,
+                            public_key: keys.public_key,
+                            username: voteForm.username || ""
+                        })
                     });
                     const data = await res.json();
                     if (data.ok) {
-                        alert("Vote Submitted! It is now pending.");
-                        setVoteForm({ voter_id: "", choice: "" });
+                        alert(`Vote Submitted! ${voteForm.username ? `Username: ${voteForm.username}` : `Voter ID: ${data.voter_id}`}`);
+                        setVoteForm({ voter_id: "", choice: "", username: "" });
                         fetchData();
                     } else {
                         alert(`Error: ${data.error}`);
@@ -373,48 +430,135 @@
 
                         {/* VOTE VIEW */}
                         {activeTab === 'vote' && (
-                            <div className="max-w-xl mx-auto bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-xl">
-                                <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
-                                    <IconVote className="mr-3 text-brand-500"/> Cast Your Vote
-                                </h2>
-                                <form onSubmit={handleVote} className="space-y-6">
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-400 mb-2">Voter ID (Simulated)</label>
-                                        <input 
-                                            type="text" 
-                                            required
-                                            value={voteForm.voter_id}
-                                            onChange={(e) => setVoteForm({...voteForm, voter_id: e.target.value})}
-                                            placeholder={`e.g. user_1`}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-400 mb-2">Select Candidate</label>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            {['Alice', 'Bob', 'Charlie', 'Dave'].map(candidate => (
-                                                <button
-                                                    key={candidate}
-                                                    type="button"
-                                                    onClick={() => setVoteForm({...voteForm, choice: candidate})}
-                                                    className={`p-3 rounded-lg border text-left transition-all ${
-                                                        voteForm.choice === candidate 
-                                                        ? 'bg-brand-600 border-brand-500 text-white' 
-                                                        : 'bg-slate-900 border-slate-700 hover:border-slate-500'
-                                                    }`}
-                                                >
-                                                    {candidate}
-                                                </button>
-                                            ))}
+                            <div className="max-w-2xl mx-auto space-y-6">
+                                {/* Key Management Section */}
+                                <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-xl">
+                                    <h3 className="text-xl font-bold text-white mb-4 flex items-center">
+                                        🔑 Your Voting Identity
+                                    </h3>
+                                    
+                                    {!keys ? (
+                                        <div className="text-center py-8">
+                                            <p className="text-slate-400 mb-6">
+                                                Generate your cryptographic keys to start voting securely.
+                                                Your keys will be stored locally in your browser.
+                                            </p>
+                                            <button
+                                                onClick={generateKeys}
+                                                className="px-6 py-3 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg transition"
+                                            >
+                                                Generate Keys
+                                            </button>
                                         </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <div className="bg-slate-900 p-4 rounded-lg border border-slate-700">
+                                                <p className="text-slate-400 text-sm mb-2">Your Voter ID</p>
+                                                <p className="text-brand-400 font-mono text-lg break-all">{keys.voter_id}</p>
+                                            </div>
+                                            
+                                            <div className="bg-slate-900 p-4 rounded-lg border border-slate-700">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <p className="text-slate-400 text-sm">Public Key</p>
+                                                    <button
+                                                        onClick={() => navigator.clipboard.writeText(keys.public_key)}
+                                                        className="text-xs text-brand-500 hover:text-brand-400"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <p className="text-slate-300 font-mono text-xs break-all">
+                                                    {keys.public_key.substring(0, 100)}...
+                                                </p>
+                                            </div>
+                                            
+                                            <div className="bg-slate-900 p-4 rounded-lg border border-yellow-700">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <p className="text-yellow-400 text-sm">Private Key (Keep Secret!)</p>
+                                                    <button
+                                                        onClick={() => setShowPrivateKey(!showPrivateKey)}
+                                                        className="text-xs text-yellow-500 hover:text-yellow-400"
+                                                    >
+                                                        {showPrivateKey ? 'Hide' : 'Show'}
+                                                    </button>
+                                                </div>
+                                                {showPrivateKey ? (
+                                                    <p className="text-slate-300 font-mono text-xs break-all">
+                                                        {keys.private_key}
+                                                    </p>
+                                                ) : (
+                                                    <p className="text-slate-600 text-sm">••••••••••••••••••••</p>
+                                                )}
+                                            </div>
+                                            
+                                            <button
+                                                onClick={() => {
+                                                    if (confirm('Are you sure? This will delete your keys and you cannot vote with this identity again.')) {
+                                                        setKeys(null);
+                                                        localStorage.removeItem('votingKeys');
+                                                    }
+                                                }}
+                                                className="text-sm text-red-400 hover:text-red-300"
+                                            >
+                                                Delete Keys
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* Voting Form */}
+                                {keys && (
+                                    <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-xl">
+                                        <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+                                            <IconVote className="mr-3 text-brand-500"/> Cast Your Vote
+                                        </h2>
+                                        <form onSubmit={handleVote} className="space-y-6">
+                                            <div>
+                                                <label className="block text-sm font-medium text-slate-400 mb-2">
+                                                    Display Name (Optional)
+                                                </label>
+                                                <input 
+                                                    type="text" 
+                                                    value={voteForm.username}
+                                                    onChange={(e) => setVoteForm({...voteForm, username: e.target.value})}
+                                                    placeholder="e.g. Alice Smith"
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                                />
+                                                <p className="text-xs text-slate-500 mt-1">
+                                                    This name will be shown alongside your cryptographic voter ID
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-slate-400 mb-2">Select Candidate</label>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    {['Alice', 'Bob', 'Charlie', 'Dave'].map(candidate => (
+                                                        <button
+                                                            key={candidate}
+                                                            type="button"
+                                                            onClick={() => setVoteForm({...voteForm, choice: candidate})}
+                                                            className={`p-3 rounded-lg border text-left transition-all ${
+                                                                voteForm.choice === candidate 
+                                                                ? 'bg-brand-600 border-brand-500 text-white' 
+                                                                : 'bg-slate-900 border-slate-700 hover:border-slate-500'
+                                                            }`}
+                                                        >
+                                                            {candidate}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <button 
+                                                type="submit" 
+                                                className="w-full py-3 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold rounded-lg shadow-lg transform transition active:scale-95"
+                                            >
+                                                Submit Signed Vote
+                                            </button>
+                                            <p className="text-xs text-slate-500 text-center">
+                                                Your vote will be cryptographically signed with your private key
+                                            </p>
+                                        </form>
                                     </div>
-                                    <button 
-                                        type="submit" 
-                                        className="w-full py-3 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold rounded-lg shadow-lg transform transition active:scale-95"
-                                    >
-                                        Submit Transaction
-                                    </button>
-                                </form>
+                                )}
                             </div>
                         )}
 
