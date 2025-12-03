@@ -76,9 +76,17 @@ class VoteRequest(BaseModel):
     choice: str
 
 
+class SignedVoteRequest(BaseModel):
+    choice: str
+    private_key: str
+    public_key: str
+    username: Optional[str] = ""
+
+
 class VoteResponse(BaseModel):
     ok: bool
     error: Optional[str] = None
+    voter_id: Optional[str] = None
 
 
 class MineResponse(BaseModel):
@@ -97,15 +105,56 @@ class StatsResponse(BaseModel):
     host: str
     port: int
     blocks: int
-    difficulty: int
+    base_difficulty: int
+    mining_difficulty: int
+    stake: int
+    stake_bonus: int
+    avg_block_time: float
     total_votes: int
     chain_valid: bool
     peers: int
+    difficulty_info: Dict[str, Any]
 
 
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok", "node_id": node.node_id}
+
+
+@app.get("/generate_keys")
+def generate_keys() -> Dict[str, str]:
+    """
+    Generate a new RSA keypair for voting.
+    """
+    from core.crypto import generate_keypair, hash_public_key
+    private_key, public_key = generate_keypair()
+    voter_id = hash_public_key(public_key)
+    
+    return {
+        "private_key": private_key,
+        "public_key": public_key,
+        "voter_id": voter_id
+    }
+
+
+@app.get("/config")
+def get_config() -> Dict[str, Any]:
+    """
+    Get system configuration parameters for UI display.
+    """
+    from config import (
+        TARGET_BLOCK_TIME,
+        DIFFICULTY_INCREASE_THRESHOLD,
+        DIFFICULTY_DECREASE_THRESHOLD,
+        MAX_STAKE_INFLUENCE
+    )
+    
+    return {
+        "target_block_time": TARGET_BLOCK_TIME,
+        "difficulty_increase_threshold": DIFFICULTY_INCREASE_THRESHOLD,
+        "difficulty_decrease_threshold": DIFFICULTY_DECREASE_THRESHOLD,
+        "max_stake_influence": MAX_STAKE_INFLUENCE
+    }
 
 
 @app.post("/vote", response_model=VoteResponse)
@@ -114,6 +163,27 @@ def cast_vote(req: VoteRequest) -> VoteResponse:
     if not accepted:
         return VoteResponse(ok=False, error="duplicate_voter")
     return VoteResponse(ok=True)
+
+
+@app.post("/vote_signed", response_model=VoteResponse)
+def cast_signed_vote(req: SignedVoteRequest) -> VoteResponse:
+    """
+    Cast a vote with digital signature authentication.
+    """
+    success, error = node.blockchain.cast_signed_vote(
+        choice=req.choice,
+        private_key=req.private_key,
+        public_key=req.public_key,
+        username=req.username or ""
+    )
+    
+    if not success:
+        return VoteResponse(ok=False, error=error)
+    
+    # Return voter ID for display
+    from core.crypto import hash_public_key
+    voter_id = hash_public_key(req.public_key)
+    return VoteResponse(ok=True, voter_id=voter_id)
 
 
 @app.post("/mine", response_model=MineResponse)
@@ -161,5 +231,23 @@ def receive_message(msg: Message) -> Dict[str, Any]:
     """
     node.handle_incoming_message(msg.model_dump())
     return {"ok": True}
+
+
+@app.get("/stakes")
+def get_stake_leaderboard() -> Dict[str, Any]:
+    """
+    Get the stake leaderboard from the tracker.
+    """
+    try:
+        resp = requests.get(f"{TRACKER_URL}/stakes", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Mark which node is the current one
+            for node_data in data.get("leaderboard", []):
+                node_data["is_current"] = node_data["node_id"] == node.node_id
+            return data
+        return {"leaderboard": [], "total_nodes": 0}
+    except Exception:
+        return {"leaderboard": [], "total_nodes": 0}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

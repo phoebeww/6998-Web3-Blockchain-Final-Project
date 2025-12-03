@@ -111,6 +111,45 @@
                             {block.previous_hash.substring(0, 16)}...
                         </p>
                     </div>
+                    
+                    {block.merkle_root && (
+                        <div className="mb-3">
+                            <p className="text-xs text-slate-500 uppercase">Merkle Root</p>
+                            <p className="text-xs font-mono truncate text-purple-400" title={block.merkle_root}>
+                                {block.merkle_root.substring(0, 16)}...
+                            </p>
+                        </div>
+                    )}
+                    
+                    {block.miner_id && (
+                        <div className="mb-3">
+                            <p className="text-xs text-slate-500 uppercase">Miner Info</p>
+                            <p className="text-xs text-slate-300 mb-1">{block.miner_id}</p>
+                            <div className="space-y-0.5">
+                                <div className="flex justify-between text-[10px]">
+                                    <span className="text-slate-500">Stake:</span>
+                                    <span className="text-green-400">⭐ {block.stake}</span>
+                                </div>
+                                {block.base_difficulty > 0 && (
+                                    <div className="flex justify-between text-[10px]">
+                                        <span className="text-slate-500">Base Diff:</span>
+                                        <span className="text-brand-300">{block.base_difficulty}</span>
+                                    </div>
+                                )}
+                                {block.difficulty > 0 && (
+                                    <div className="flex justify-between text-[10px]">
+                                        <span className="text-slate-500">Used Diff:</span>
+                                        <span className="text-yellow-400">{block.difficulty}</span>
+                                    </div>
+                                )}
+                                {block.base_difficulty > 0 && block.difficulty > 0 && block.base_difficulty > block.difficulty && (
+                                    <div className="text-[10px] text-green-400 mt-1">
+                                        -{block.base_difficulty - block.difficulty} stake bonus
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
 
                     <div className="mt-auto pt-3 border-t border-slate-700">
                         <p className="text-xs text-slate-400 mb-1 flex items-center">
@@ -119,12 +158,21 @@
                         </p>
                         <div className="space-y-1 h-16 overflow-y-auto pr-2">
                             {block.transactions.length === 0 ? (
-                                <p className="text-xs text-slate-600 italic">No transactions (Mining Reward)</p>
+                                <p className="text-xs text-slate-600 italic">No transactions</p>
                             ) : (
                                 block.transactions.map((tx, i) => (
-                                    <div key={i} className="text-xs bg-slate-900 p-1 rounded flex justify-between mb-1">
-                                        <span className="font-mono text-brand-200">{tx.voter_id}</span>
-                                        <span className="text-brand-500 font-bold">{tx.choice}</span>
+                                    <div key={i} className="text-xs bg-slate-900 p-1 rounded mb-1">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-brand-200 truncate flex-1" title={tx.voter_id}>
+                                                {tx.username || tx.voter_id.substring(0,8) + '...'}
+                                            </span>
+                                            <span className="text-brand-500 font-bold ml-2">{tx.choice}</span>
+                                        </div>
+                                        {tx.signature && (
+                                            <div className="flex items-center mt-0.5">
+                                                <span className="text-green-400 text-[10px]">✓ Signed</span>
+                                            </div>
+                                        )}
                                     </div>
                                 ))
                             )}
@@ -145,25 +193,43 @@
             const [stats, setStats] = useState(null);
             const [chain, setChain] = useState([]);
             const [results, setResults] = useState(null);
+            const [stakes, setStakes] = useState(null);
+            const [config, setConfig] = useState(null);
             const [loading, setLoading] = useState(false);
             
             // Forms
-            const [voteForm, setVoteForm] = useState({ voter_id: "", choice: "" });
+            const [voteForm, setVoteForm] = useState({ voter_id: "", choice: "", username: "" });
             const [mineStatus, setMineStatus] = useState(null);
+            
+            // Crypto keys state
+            const [keys, setKeys] = useState(null);
+            const [showPrivateKey, setShowPrivateKey] = useState(false);
+            
+            // Load keys from localStorage on mount
+            useEffect(() => {
+                const savedKeys = localStorage.getItem('votingKeys');
+                if (savedKeys) {
+                    setKeys(JSON.parse(savedKeys));
+                }
+            }, []);
 
             // Fetch Data using RELATIVE paths (it talks to the server serving this file)
             const fetchData = useCallback(async () => {
                 setLoading(true);
                 try {
-                    const [statsRes, chainRes, resultsRes] = await Promise.all([
+                    const [statsRes, chainRes, resultsRes, stakesRes, configRes] = await Promise.all([
                         fetch('/stats'),
                         fetch('/chain'),
-                        fetch('/results')
+                        fetch('/results'),
+                        fetch('/stakes'),
+                        fetch('/config')
                     ]);
 
                     if (statsRes.ok) setStats(await statsRes.json());
                     if (chainRes.ok) setChain(await chainRes.json());
                     if (resultsRes.ok) setResults(await resultsRes.json());
+                    if (stakesRes.ok) setStakes(await stakesRes.json());
+                    if (configRes.ok) setConfig(await configRes.json());
                 } catch (err) {
                     console.error("Connection failed", err);
                     setStats(null); // Indicator of offline
@@ -179,19 +245,60 @@
                 return () => clearInterval(interval);
             }, [fetchData]);
 
+            const generateKeys = async () => {
+                try {
+                    const res = await fetch('/generate_keys');
+                    const data = await res.json();
+                    
+                    const newKeys = {
+                        private_key: data.private_key,
+                        public_key: data.public_key,
+                        voter_id: data.voter_id
+                    };
+                    
+                    setKeys(newKeys);
+                    localStorage.setItem('votingKeys', JSON.stringify(newKeys));
+                } catch (err) {
+                    console.error("Failed to generate keys:", err);
+                }
+            };
+            
             const handleVote = async (e) => {
                 e.preventDefault();
+                
+                // Check if user has keys for signed voting
+                if (!keys) {
+                    alert("Please generate your voting keys first!");
+                    return;
+                }
+                
+                if (!voteForm.choice) {
+                    alert("Please select a candidate!");
+                    return;
+                }
+                
                 try {
-                    // Use relative path
-                    const res = await fetch('/vote', {
+                    // Use signed voting endpoint
+                    const res = await fetch('/vote_signed', {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(voteForm)
+                        body: JSON.stringify({
+                            choice: voteForm.choice,
+                            private_key: keys.private_key,
+                            public_key: keys.public_key,
+                            username: voteForm.username || ""
+                        })
                     });
                     const data = await res.json();
                     if (data.ok) {
-                        alert("Vote Submitted! It is now pending.");
-                        setVoteForm({ voter_id: "", choice: "" });
+                        // Show success message
+                        alert(`Vote Submitted Successfully!\n${voteForm.username ? `Username: ${voteForm.username}` : `Voter ID: ${data.voter_id}`}\nYour keys will be deleted (each key can only vote once).`);
+                        
+                        // After user closes the alert, clear form and delete keys
+                        setVoteForm({ voter_id: "", choice: "", username: "" });
+                        setKeys(null);
+                        localStorage.removeItem('votingKeys');
+                        
                         fetchData();
                     } else {
                         alert(`Error: ${data.error}`);
@@ -275,7 +382,7 @@
                         {/* DASHBOARD VIEW */}
                         {activeTab === 'dashboard' && stats && (
                             <div className="space-y-8 animate-fade-in">
-                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                                     <StatCard 
                                         label="Node ID" 
                                         value={stats.node_id} 
@@ -284,8 +391,14 @@
                                     <StatCard 
                                         label="Blocks" 
                                         value={stats.blocks} 
-                                        subtext={`Difficulty: ${stats.difficulty}`}
+                                        subtext={`Base Difficulty: ${stats.base_difficulty}`}
                                         icon={<IconBox className="text-purple-400"/>} 
+                                    />
+                                    <StatCard 
+                                        label="Your Stake" 
+                                        value={`⭐ ${stats.stake}`} 
+                                        subtext={`Mining Difficulty: ${stats.mining_difficulty}`}
+                                        icon={<IconPickaxe className="text-yellow-400"/>} 
                                     />
                                     <StatCard 
                                         label="Total Votes" 
@@ -298,6 +411,151 @@
                                         subtext="Active Connections"
                                         icon={<IconRefresh className="text-orange-400"/>} 
                                     />
+                                </div>
+                                
+                                {/* Stake Leaderboard */}
+                                {stakes && stakes.leaderboard && stakes.leaderboard.length > 0 && (
+                                    <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                                        <h2 className="text-lg font-bold text-white mb-4 flex items-center">
+                                            🏆 Node Reputation Leaderboard
+                                        </h2>
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="border-b border-slate-700">
+                                                    <tr className="text-slate-400">
+                                                        <th className="text-left py-2 px-3">Rank</th>
+                                                        <th className="text-left py-2 px-3">Node ID</th>
+                                                        <th className="text-left py-2 px-3">Stake</th>
+                                                        <th className="text-left py-2 px-3">Mining Advantage</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {stakes.leaderboard.map((node, idx) => (
+                                                        <tr key={node.node_id} className={`border-b border-slate-800 ${node.is_current ? 'bg-brand-900/20' : ''}`}>
+                                                            <td className="py-2 px-3">
+                                                                <span className={`${idx === 0 ? 'text-yellow-400' : idx === 1 ? 'text-slate-300' : idx === 2 ? 'text-orange-600' : 'text-slate-500'}`}>
+                                                                    #{idx + 1}
+                                                                </span>
+                                                            </td>
+                                                            <td className="py-2 px-3">
+                                                                <span className={node.is_current ? 'text-brand-400 font-bold' : 'text-slate-300'}>
+                                                                    {node.node_id}
+                                                                    {node.is_current && ' (You)'}
+                                                                </span>
+                                                            </td>
+                                                            <td className="py-2 px-3">
+                                                                <span className="text-green-400 font-mono">
+                                                                    ⭐ {node.stake}
+                                                                </span>
+                                                            </td>
+                                                            <td className="py-2 px-3">
+                                                                <span className="text-brand-400">
+                                                                    {node.stake >= 7 ? `-${Math.min(Math.floor(node.stake / 7), 2)} difficulty` : 'None'}
+                                                                </span>
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Difficulty Monitoring Panel */}
+                                <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
+                                    <h2 className="text-lg font-bold text-white mb-4 flex items-center">
+                                        <IconPickaxe className="mr-2"/> Dynamic Difficulty Monitor
+                                    </h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Base Difficulty</p>
+                                            <p className="text-3xl font-bold text-brand-500">{stats.base_difficulty}</p>
+                                        </div>
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Your Mining Difficulty</p>
+                                            <p className="text-3xl font-bold text-yellow-400">{stats.mining_difficulty}</p>
+                                            {stats.stake_bonus > 0 && (
+                                                <p className="text-xs text-green-400 mt-1">-{stats.stake_bonus} from stake</p>
+                                            )}
+                                        </div>
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Avg Block Time</p>
+                                            <p className="text-3xl font-bold text-green-400">{stats.avg_block_time?.toFixed(2) || '0.00'}s</p>
+                                        </div>
+                                        <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                            <p className="text-slate-400 text-sm mb-1">Target Time</p>
+                                            <p className="text-3xl font-bold text-slate-400">
+                                                {config ? `${config.target_block_time.toFixed(2)}s` : '15.00s'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    <div className="bg-slate-800 p-4 rounded-lg border border-slate-700">
+                                        <p className="text-slate-300 text-sm mb-2">Difficulty Adjustment Status</p>
+                                        
+                                        {stats.difficulty_info && stats.difficulty_info.adjustment_reason === 'insufficient_blocks' ? (
+                                            <div>
+                                                <p className="text-slate-400 text-sm mb-1">
+                                                    ⏳ Collecting data... Need {stats.difficulty_info.blocks_until_adjustment} more blocks
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    Difficulty adjustment starts after 3 blocks
+                                                </p>
+                                            </div>
+                                        ) : stats.difficulty_info && stats.difficulty_info.will_increase && config ? (
+                                            <div>
+                                                <p className="text-yellow-400 text-sm mb-1">
+                                                    ⚡ Mining too fast! Difficulty will increase.
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    Avg: {stats.avg_block_time.toFixed(1)}s &lt; {config.difficulty_increase_threshold}s threshold
+                                                </p>
+                                                <p className="text-yellow-300 text-xs mt-1">
+                                                    Next block: {stats.base_difficulty} → {Math.min(stats.base_difficulty + 1, 5)}
+                                                </p>
+                                            </div>
+                                        ) : stats.difficulty_info && stats.difficulty_info.will_decrease && config ? (
+                                            <div>
+                                                <p className="text-blue-400 text-sm mb-1">
+                                                    🐢 Mining too slow! Difficulty decreased.
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    Avg: {stats.avg_block_time.toFixed(1)}s &gt; {config.difficulty_decrease_threshold}s threshold
+                                                </p>
+                                                {stats.difficulty_info.will_decrease && stats.base_difficulty > 1 && (
+                                                    <p className="text-blue-300 text-xs mt-1">
+                                                        Next block: {stats.base_difficulty} → {Math.max(stats.base_difficulty - 1, 1)}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        ) : config ? (
+                                            <div>
+                                                <p className="text-green-400 text-sm mb-1">
+                                                    ✅ Mining speed optimal. Difficulty stable.
+                                                </p>
+                                                <p className="text-slate-500 text-xs">
+                                                    Target: {config.difficulty_increase_threshold}-{config.difficulty_decrease_threshold}s per block
+                                                </p>
+                                            </div>
+                                        ) : null}
+                                        
+                                        {/* Stake Influence Display */}
+                                        {stats.stake >= 0 && (
+                                            <div className="mt-3 pt-3 border-t border-slate-700">
+                                                <p className="text-slate-400 text-xs mb-1">Stake Influence:</p>
+                                                <p className="text-brand-400 text-sm">
+                                                    Your stake ({stats.stake}) reduces mining difficulty by {stats.stake_bonus}
+                                                    {stats.stake_bonus === 0 && stats.stake > 0 && (
+                                                        <span className="text-slate-500">
+                                                            {' '}(next bonus at {Math.ceil((stats.stake_bonus + 1) * 7)} stake)
+                                                        </span>
+                                                    )}
+                                                    {stats.stake === 0 && (
+                                                        <span className="text-slate-500"> (mine blocks to earn stake)</span>
+                                                    )}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
@@ -317,69 +575,175 @@
 
                         {/* VOTE VIEW */}
                         {activeTab === 'vote' && (
-                            <div className="max-w-xl mx-auto bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-xl">
-                                <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
-                                    <IconVote className="mr-3 text-brand-500"/> Cast Your Vote
-                                </h2>
-                                <form onSubmit={handleVote} className="space-y-6">
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-400 mb-2">Voter ID (Simulated)</label>
-                                        <input 
-                                            type="text" 
-                                            required
-                                            value={voteForm.voter_id}
-                                            onChange={(e) => setVoteForm({...voteForm, voter_id: e.target.value})}
-                                            placeholder={`e.g. user_1`}
-                                            className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-sm font-medium text-slate-400 mb-2">Select Candidate</label>
-                                        <div className="grid grid-cols-2 gap-3">
-                                            {['Alice', 'Bob', 'Charlie', 'Dave'].map(candidate => (
-                                                <button
-                                                    key={candidate}
-                                                    type="button"
-                                                    onClick={() => setVoteForm({...voteForm, choice: candidate})}
-                                                    className={`p-3 rounded-lg border text-left transition-all ${
-                                                        voteForm.choice === candidate 
-                                                        ? 'bg-brand-600 border-brand-500 text-white' 
-                                                        : 'bg-slate-900 border-slate-700 hover:border-slate-500'
-                                                    }`}
-                                                >
-                                                    {candidate}
-                                                </button>
-                                            ))}
+                            <div className="max-w-2xl mx-auto space-y-6">
+                                {/* Key Management Section */}
+                                <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-xl">
+                                    <h3 className="text-xl font-bold text-white mb-4 flex items-center">
+                                        🔑 Your Voting Identity
+                                    </h3>
+                                    
+                                    {!keys ? (
+                                        <div className="text-center py-8">
+                                            <p className="text-slate-400 mb-6">
+                                                Generate your cryptographic keys to start voting securely.
+                                                Your keys will be stored locally in your browser.
+                                            </p>
+                                            <button
+                                                onClick={generateKeys}
+                                                className="px-6 py-3 bg-brand-600 hover:bg-brand-500 text-white font-bold rounded-lg shadow-lg transition"
+                                            >
+                                                Generate Keys
+                                            </button>
                                         </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <div className="bg-slate-900 p-4 rounded-lg border border-slate-700">
+                                                <p className="text-slate-400 text-sm mb-2">Your Voter ID</p>
+                                                <p className="text-brand-400 font-mono text-lg break-all">{keys.voter_id}</p>
+                                            </div>
+                                            
+                                            <div className="bg-slate-900 p-4 rounded-lg border border-slate-700">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <p className="text-slate-400 text-sm">Public Key</p>
+                                                    <button
+                                                        onClick={() => navigator.clipboard.writeText(keys.public_key)}
+                                                        className="text-xs text-brand-500 hover:text-brand-400"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <p className="text-slate-300 font-mono text-xs break-all">
+                                                    {keys.public_key.substring(0, 100)}...
+                                                </p>
+                                            </div>
+                                            
+                                            <div className="bg-slate-900 p-4 rounded-lg border border-yellow-700">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <p className="text-yellow-400 text-sm">Private Key (Keep Secret!)</p>
+                                                    <button
+                                                        onClick={() => setShowPrivateKey(!showPrivateKey)}
+                                                        className="text-xs text-yellow-500 hover:text-yellow-400"
+                                                    >
+                                                        {showPrivateKey ? 'Hide' : 'Show'}
+                                                    </button>
+                                                </div>
+                                                {showPrivateKey ? (
+                                                    <p className="text-slate-300 font-mono text-xs break-all">
+                                                        {keys.private_key}
+                                                    </p>
+                                                ) : (
+                                                    <p className="text-slate-600 text-sm">••••••••••••••••••••</p>
+                                                )}
+                                            </div>
+                                            
+                                            <button
+                                                onClick={() => {
+                                                    setKeys(null);
+                                                    localStorage.removeItem('votingKeys');
+                                                }}
+                                                className="text-sm text-red-400 hover:text-red-300"
+                                            >
+                                                Delete Keys
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+                                
+                                {/* Voting Form */}
+                                {keys && (
+                                    <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 shadow-xl">
+                                        <h2 className="text-2xl font-bold text-white mb-6 flex items-center">
+                                            <IconVote className="mr-3 text-brand-500"/> Cast Your Vote
+                                        </h2>
+                                        <form onSubmit={handleVote} className="space-y-6">
+                                            <div>
+                                                <label className="block text-sm font-medium text-slate-400 mb-2">
+                                                    Display Name (Optional)
+                                                </label>
+                                                <input 
+                                                    type="text" 
+                                                    value={voteForm.username}
+                                                    onChange={(e) => setVoteForm({...voteForm, username: e.target.value})}
+                                                    placeholder="e.g. Alice Smith"
+                                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-white focus:ring-2 focus:ring-brand-500 focus:outline-none"
+                                                />
+                                                <p className="text-xs text-slate-500 mt-1">
+                                                    This name will be shown alongside your cryptographic voter ID
+                                                </p>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-medium text-slate-400 mb-2">Select Candidate</label>
+                                                <div className="grid grid-cols-2 gap-3">
+                                                    {['Alice', 'Bob', 'Charlie', 'Dave'].map(candidate => (
+                                                        <button
+                                                            key={candidate}
+                                                            type="button"
+                                                            onClick={() => setVoteForm({...voteForm, choice: candidate})}
+                                                            className={`p-3 rounded-lg border text-left transition-all ${
+                                                                voteForm.choice === candidate 
+                                                                ? 'bg-brand-600 border-brand-500 text-white' 
+                                                                : 'bg-slate-900 border-slate-700 hover:border-slate-500'
+                                                            }`}
+                                                        >
+                                                            {candidate}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                            <button 
+                                                type="submit" 
+                                                className="w-full py-3 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold rounded-lg shadow-lg transform transition active:scale-95"
+                                            >
+                                                Submit Signed Vote
+                                            </button>
+                                            <p className="text-xs text-slate-500 text-center">
+                                                Your vote will be cryptographically signed with your private key
+                                            </p>
+                                        </form>
                                     </div>
-                                    <button 
-                                        type="submit" 
-                                        className="w-full py-3 bg-gradient-to-r from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 text-white font-bold rounded-lg shadow-lg transform transition active:scale-95"
-                                    >
-                                        Submit Transaction
-                                    </button>
-                                </form>
+                                )}
                             </div>
                         )}
 
                         {/* MINE VIEW */}
-                        {activeTab === 'mine' && (
-                            <div className="max-w-2xl mx-auto text-center space-y-8 mt-12">
-                                <div className="bg-slate-800 p-8 rounded-full w-40 h-40 mx-auto flex items-center justify-center border-4 border-slate-700 shadow-2xl relative overflow-hidden group">
-                                    <div className="absolute inset-0 bg-brand-500/10 rounded-full scale-0 group-hover:scale-100 transition-transform duration-500"></div>
-                                    <IconPickaxe className={`w-16 h-16 relative z-10 transition-transform duration-300 ${mineStatus ? 'animate-bounce text-yellow-400' : 'text-slate-500 group-hover:text-brand-400 group-hover:rotate-12'}`} />
+                        {activeTab === 'mine' && stats && (
+                            <div className="max-w-2xl mx-auto space-y-8 mt-12">
+                                {/* Mining Advantage Panel */}
+                                <div className="bg-slate-800 p-6 rounded-xl border border-slate-700">
+                                    <h3 className="text-lg font-bold text-white mb-4">💎 Your Mining Advantage</h3>
+                                    <div className="grid grid-cols-3 gap-4 text-center">
+                                        <div className="bg-slate-900 p-4 rounded-lg">
+                                            <p className="text-slate-400 text-sm">Your Stake</p>
+                                            <p className="text-2xl font-bold text-green-400">⭐ {stats.stake}</p>
+                                        </div>
+                                        <div className="bg-slate-900 p-4 rounded-lg">
+                                            <p className="text-slate-400 text-sm">Base Difficulty</p>
+                                            <p className="text-2xl font-bold text-slate-300">{stats.base_difficulty}</p>
+                                        </div>
+                                        <div className="bg-slate-900 p-4 rounded-lg">
+                                            <p className="text-slate-400 text-sm">Your Difficulty</p>
+                                            <p className="text-2xl font-bold text-brand-400">{stats.mining_difficulty}</p>
+                                        </div>
+                                    </div>
+                                    {stats.mining_difficulty < stats.base_difficulty && (
+                                        <p className="text-center text-green-400 text-sm mt-4">
+                                            🎉 Stake bonus: -{stats.base_difficulty - stats.mining_difficulty} difficulty!
+                                        </p>
+                                    )}
                                 </div>
-                                <div>
-                                    <h2 className="text-3xl font-bold text-white mb-2">Mining Console</h2>
-                                    <p className="text-slate-400">Seal pending transactions into a new block and broadcast to the network.</p>
+                                
+                                {/* Mining Console */}
+                                <div className="bg-slate-800 p-8 rounded-xl border border-slate-700 text-center">
+                                    <h2 className="text-2xl font-bold text-white mb-3">Mining Console</h2>
+                                    <p className="text-slate-400 mb-6">Seal pending transactions into a new block and broadcast to the network.</p>
+                                    <button 
+                                        onClick={handleMine}
+                                        disabled={!!mineStatus}
+                                        className="px-8 py-4 bg-yellow-600 hover:bg-yellow-500 text-white rounded-xl font-bold text-xl shadow-lg disabled:opacity-50 transition-all transform hover:scale-105 active:scale-95"
+                                    >
+                                        {mineStatus || "Mine New Block"}
+                                    </button>
                                 </div>
-                                <button 
-                                    onClick={handleMine}
-                                    disabled={!!mineStatus}
-                                    className="px-8 py-4 bg-yellow-600 hover:bg-yellow-500 text-white rounded-xl font-bold text-xl shadow-lg disabled:opacity-50 transition-all transform hover:scale-105 active:scale-95"
-                                >
-                                    {mineStatus || "Mine New Block"}
-                                </button>
                             </div>
                         )}
 

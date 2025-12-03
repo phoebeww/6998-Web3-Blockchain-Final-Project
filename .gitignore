@@ -1,0 +1,97 @@
+/data/
+
+# macOS System Files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Logs
+*.log
+
+# Django stuff:
+*.pot
+*.pyc
+
+# Flask / Scrapy / etc.
+instance/
+.scrapy/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+poetry.toml
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pylint
+pylint-report.txt
+pylint-score.txt
+
+# VS Code
+.vscode/
+.history/
+
+# PyCharm / JetBrains
+.idea/
+
+# Local configs
+*.local
+*.env*
