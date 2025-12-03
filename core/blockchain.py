@@ -91,7 +91,8 @@ class Transaction:
 @dataclass
 class Block:
     """
-    Basic proof-of-work block for the voting chain.
+    Proof-of-work block with stake-based difficulty adjustment.
+    Combines PoW security with PoS-like incentives through reputation staking.
     """
     index: int
     transactions: List[Transaction]
@@ -99,6 +100,10 @@ class Block:
     timestamp: float = field(default_factory=time.time)
     nonce: int = 0
     hash: str = ""
+    miner_id: str = ""  # ID of the node that mined this block
+    stake: int = 0  # Miner's stake value at time of mining
+    difficulty: int = 0  # Actual difficulty used to mine this block
+    base_difficulty: int = 0  # Network base difficulty at time of mining
 
     def compute_hash(self) -> str:
         # note: we don't include self.hash in the data used to compute the hash
@@ -108,6 +113,10 @@ class Block:
             "previous_hash": self.previous_hash,
             "timestamp": self.timestamp,
             "nonce": self.nonce,
+            "miner_id": self.miner_id,
+            "stake": self.stake,
+            "difficulty": self.difficulty,
+            "base_difficulty": self.base_difficulty,
         }
         block_string = json.dumps(block_data, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
@@ -115,7 +124,9 @@ class Block:
     def mine(self, difficulty: int = 2) -> None:
         """
         Simple proof-of-work: find a hash with `difficulty` leading zeros.
+        Records the actual difficulty used for this block.
         """
+        self.difficulty = difficulty  # Store the difficulty used
         target_prefix = "0" * difficulty
         # recompute hash each time nonce is updated
         self.hash = self.compute_hash()
@@ -131,6 +142,10 @@ class Block:
             "timestamp": self.timestamp,
             "nonce": self.nonce,
             "hash": self.hash,
+            "miner_id": self.miner_id,
+            "stake": self.stake,
+            "difficulty": self.difficulty,
+            "base_difficulty": self.base_difficulty,
         }
 
     @classmethod
@@ -142,6 +157,10 @@ class Block:
             previous_hash=data["previous_hash"],
             timestamp=data.get("timestamp", time.time()),
             nonce=data.get("nonce", 0),
+            miner_id=data.get("miner_id", ""),
+            stake=data.get("stake", 0),
+            difficulty=data.get("difficulty", 0),
+            base_difficulty=data.get("base_difficulty", 0),
         )
         # If a stored hash exists, keep it; otherwise compute one.
         stored_hash = data.get("hash")
@@ -179,6 +198,17 @@ class Blockchain:
     @property
     def last_block(self) -> Block:
         return self.chain[-1]
+    
+    def sync_base_difficulty_from_chain(self) -> None:
+        """
+        Sync base_difficulty from the latest block in the chain.
+        This ensures all nodes converge to the same base_difficulty after syncing.
+        """
+        if len(self.chain) > 1:
+            # Use the base_difficulty from the most recent block
+            latest_base = self.last_block.base_difficulty
+            if latest_base > 0:  # Only update if block has valid base_difficulty
+                self.base_difficulty = latest_base
 
     # voting logic
     
@@ -291,6 +321,33 @@ class Blockchain:
         
         return sum(time_diffs) / len(time_diffs)
     
+    def get_difficulty_adjustment_info(self) -> Dict[str, Any]:
+        """
+        Get detailed information about difficulty adjustment status.
+        
+        Returns:
+            dict: Information about why difficulty is/isn't adjusting
+        """
+        avg_time = self.calculate_average_block_time()
+        blocks_until_adjustment = max(0, DIFFICULTY_ADJUSTMENT_INTERVAL - len(self.chain))
+        
+        adjustment_reason = "stable"
+        if len(self.chain) < DIFFICULTY_ADJUSTMENT_INTERVAL:
+            adjustment_reason = "insufficient_blocks"
+        elif avg_time < DIFFICULTY_INCREASE_THRESHOLD:
+            adjustment_reason = "too_fast"
+        elif avg_time > DIFFICULTY_DECREASE_THRESHOLD:
+            adjustment_reason = "too_slow"
+        
+        return {
+            "current_base_difficulty": self.base_difficulty,
+            "avg_block_time": avg_time,
+            "blocks_until_adjustment": blocks_until_adjustment,
+            "adjustment_reason": adjustment_reason,
+            "will_increase": avg_time < DIFFICULTY_INCREASE_THRESHOLD and len(self.chain) >= DIFFICULTY_ADJUSTMENT_INTERVAL,
+            "will_decrease": avg_time > DIFFICULTY_DECREASE_THRESHOLD and len(self.chain) >= DIFFICULTY_ADJUSTMENT_INTERVAL,
+        }
+    
     def adjust_difficulty(self) -> int:
         """
         Dynamically adjust mining difficulty based on recent block times.
@@ -307,32 +364,52 @@ class Blockchain:
         
         avg_time = self.calculate_average_block_time()
         
+        old_difficulty = self.base_difficulty
+        
         # If average block time is too fast, increase difficulty
         if avg_time < DIFFICULTY_INCREASE_THRESHOLD:
             self.base_difficulty = min(MAX_DIFFICULTY, self.base_difficulty + 1)
+            if self.base_difficulty > old_difficulty:
+                print(f"[Blockchain] Difficulty increased: {old_difficulty} -> {self.base_difficulty} (avg time: {avg_time:.1f}s)")
         
         # If average block time is too slow, decrease difficulty
         elif avg_time > DIFFICULTY_DECREASE_THRESHOLD:
             self.base_difficulty = max(MIN_DIFFICULTY, self.base_difficulty - 1)
+            if self.base_difficulty < old_difficulty:
+                print(f"[Blockchain] Difficulty decreased: {old_difficulty} -> {self.base_difficulty} (avg time: {avg_time:.1f}s)")
         
         return self.base_difficulty
 
-    def mine_pending_transactions(self) -> Optional[Block]:
+    def mine_pending_transactions(self, miner_id: str = "", stake: int = 0, 
+                                   custom_difficulty: Optional[int] = None) -> Optional[Block]:
         """
         Package all pending transactions into a new block and mine it.
-        Automatically adjusts difficulty based on recent block times.
-        Returns the mined block, or None if there were no transactions.
+        Automatically adjusts difficulty based on recent block times and miner stake.
+        
+        Args:
+            miner_id: ID of the miner mining this block
+            stake: Miner's current stake value
+            custom_difficulty: If provided, use this difficulty instead of auto-calculated
+            
+        Returns:
+            Block or None: The mined block or None if there were no transactions.
         """
         if not self.pending_transactions:
             return None
 
-        # Adjust difficulty before mining
-        current_difficulty = self.adjust_difficulty()
+        # Use custom difficulty if provided, otherwise adjust automatically
+        if custom_difficulty is not None:
+            current_difficulty = custom_difficulty
+        else:
+            current_difficulty = self.adjust_difficulty()
 
         new_block = Block(
             index=len(self.chain),
             transactions=self.pending_transactions.copy(),
             previous_hash=self.last_block.hash,
+            miner_id=miner_id,
+            stake=stake,
+            base_difficulty=self.base_difficulty,
         )
         new_block.mine(current_difficulty)
         self.chain.append(new_block)

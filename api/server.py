@@ -106,10 +106,14 @@ class StatsResponse(BaseModel):
     port: int
     blocks: int
     base_difficulty: int
+    mining_difficulty: int
+    stake: int
+    stake_bonus: int
     avg_block_time: float
     total_votes: int
     chain_valid: bool
     peers: int
+    difficulty_info: Dict[str, Any]
 
 
 @app.get("/health")
@@ -130,6 +134,26 @@ def generate_keys() -> Dict[str, str]:
         "private_key": private_key,
         "public_key": public_key,
         "voter_id": voter_id
+    }
+
+
+@app.get("/config")
+def get_config() -> Dict[str, Any]:
+    """
+    Get system configuration parameters for UI display.
+    """
+    from config import (
+        TARGET_BLOCK_TIME,
+        DIFFICULTY_INCREASE_THRESHOLD,
+        DIFFICULTY_DECREASE_THRESHOLD,
+        MAX_STAKE_INFLUENCE
+    )
+    
+    return {
+        "target_block_time": TARGET_BLOCK_TIME,
+        "difficulty_increase_threshold": DIFFICULTY_INCREASE_THRESHOLD,
+        "difficulty_decrease_threshold": DIFFICULTY_DECREASE_THRESHOLD,
+        "max_stake_influence": MAX_STAKE_INFLUENCE
     }
 
 
@@ -207,5 +231,23 @@ def receive_message(msg: Message) -> Dict[str, Any]:
     """
     node.handle_incoming_message(msg.model_dump())
     return {"ok": True}
+
+
+@app.get("/stakes")
+def get_stake_leaderboard() -> Dict[str, Any]:
+    """
+    Get the stake leaderboard from the tracker.
+    """
+    try:
+        resp = requests.get(f"{TRACKER_URL}/stakes", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            # Mark which node is the current one
+            for node_data in data.get("leaderboard", []):
+                node_data["is_current"] = node_data["node_id"] == node.node_id
+            return data
+        return {"leaderboard": [], "total_nodes": 0}
+    except Exception:
+        return {"leaderboard": [], "total_nodes": 0}
 
 app.mount("/", StaticFiles(directory="static", html=True), name="static")

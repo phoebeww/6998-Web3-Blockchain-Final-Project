@@ -4,7 +4,9 @@ import time
 from typing import List, Dict, Any
 
 from fastapi import FastAPI
+from pydantic import BaseModel
 from network.schemas import NodeInfo, RegisterRequest, RegisterResponse
+from config import DEFAULT_STAKE, STAKE_REWARD, STAKE_PENALTY
 
 app = FastAPI(title="Tracker Service")
 
@@ -14,6 +16,9 @@ nodes: List[NodeInfo] = []
 PEER_TIMEOUT = 20 
 
 registered_nodes: Dict[str, Any] = {}
+
+# Stake management for PoW + PoS hybrid consensus
+node_stakes: Dict[str, int] = {}  # {node_id: stake_value}
 
 def cleanup_stale_nodes():
     """
@@ -66,3 +71,55 @@ def get_peers() -> list[NodeInfo]:
     """
     cleanup_stale_nodes()
     return [data["info"] for data in registered_nodes.values()]
+
+
+class StakeUpdate(BaseModel):
+    node_id: str
+    stake: int
+
+
+@app.post("/update_stake")
+def update_stake(req: StakeUpdate) -> Dict[str, Any]:
+    """
+    Node reports its current stake value to the tracker.
+    """
+    node_stakes[req.node_id] = req.stake
+    return {"ok": True, "stake": req.stake}
+
+
+@app.get("/stakes")
+def get_stakes() -> Dict[str, Any]:
+    """
+    Get the stake leaderboard of all nodes.
+    Returns nodes sorted by stake in descending order.
+    """
+    cleanup_stale_nodes()
+    
+    # Build leaderboard with node info and stakes
+    leaderboard = []
+    for node_id, data in registered_nodes.items():
+        info = data["info"]
+        stake = node_stakes.get(node_id, DEFAULT_STAKE)
+        leaderboard.append({
+            "node_id": node_id,
+            "host": info.host,
+            "port": info.port,
+            "stake": stake
+        })
+    
+    # Sort by stake descending
+    leaderboard.sort(key=lambda x: x["stake"], reverse=True)
+    
+    return {
+        "leaderboard": leaderboard,
+        "total_nodes": len(leaderboard)
+    }
+
+
+@app.get("/stake/{node_id}")
+def get_node_stake(node_id: str) -> Dict[str, Any]:
+    """
+    Get the stake value for a specific node.
+    """
+    stake = node_stakes.get(node_id, DEFAULT_STAKE)
+    return {"node_id": node_id, "stake": stake}
